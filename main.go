@@ -1,9 +1,8 @@
 package main
 
 import (
+	"context"
 	"flag"
-	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,22 +12,41 @@ func main() {
 	configPath := flag.String("config", "config.yaml", "Path to configuration file")
 	flag.Parse()
 
+	// Create a context that can be cancelled
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Set up signal handling
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start signal handler in a goroutine
+	go func() {
+		<-sigChan
+		logger.InfoContext(ctx, "received shutdown signal, initiating graceful shutdown")
+		cancel()
+	}()
+
 	config, err := LoadConfig(*configPath)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		logger.ErrorContext(ctx, "failed to load config", "error", err)
+		os.Exit(1)
 	}
 
 	processes := make([]*Process, len(config.Processes))
 	for i, procConfig := range config.Processes {
-		processes[i] = NewProcess(procConfig)
+		processes[i] = NewProcess(ctx, procConfig, logger)
 	}
 
 	// Start all processes
 	for _, proc := range processes {
 		if err := proc.Start(); err != nil {
-			log.Printf("Failed to start process %s: %v", proc.config.Name, err)
+			logger.ErrorContext(ctx, "failed to start process",
+				"process", proc.config.Name,
+				"error", err)
 		} else {
-			log.Printf("Started process %s", proc.config.Name)
+			logger.InfoContext(ctx, "started process",
+				"process", proc.config.Name)
 		}
 	}
 
@@ -37,20 +55,19 @@ func main() {
 		go proc.Monitor()
 	}
 
-	// Handle shutdown gracefully
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	<-sigChan
-	log.Println("Shutting down...")
+	// Wait for context cancellation
+	<-ctx.Done()
 
 	// Stop all processes
+	logger.InfoContext(ctx, "stopping all processes")
 	for _, proc := range processes {
 		proc.StopMonitoring()
 		if err := proc.Stop(); err != nil {
-			log.Printf("Error stopping process %s: %v", proc.config.Name, err)
+			logger.ErrorContext(ctx, "error stopping process",
+				"process", proc.config.Name,
+				"error", err)
 		}
 	}
 
-	fmt.Println("Shutdown complete")
+	logger.InfoContext(ctx, "shutdown complete")
 }

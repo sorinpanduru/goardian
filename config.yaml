@@ -1,8 +1,8 @@
 processes:
   - name: "example-service"
-    command: "echo"
-    args: ["running"]
-    start_timeout: "10s"
+    command: "/bin/sh"
+    args: ["-c", "echo 'running'; sleep 3; exit 0"]
+    start_timeout: "1s"
     restart_delay: "5s"
     max_restarts: 5
     working_dir: "/Users/sorin.panduru/work/go/goardian"
