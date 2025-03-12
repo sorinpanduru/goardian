@@ -1,0 +1,14 @@
+processes:
+  - name: "example-service"
+    command: "echo"
+    args: ["running"]
+    start_timeout: "10s"
+    restart_delay: "5s"
+    max_restarts: 5
+    working_dir: "/Users/sorin.panduru/work/go/goardian"
+    environment:
+      - "ENV=production"
+      - "DEBUG=false"
+    backoff_enabled: true
+    backoff_factor: 2.0
+    backoff_max_delay: "1m" 
