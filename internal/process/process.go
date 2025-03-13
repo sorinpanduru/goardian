@@ -187,10 +187,7 @@ func (p *Process) Stop(ctx context.Context) error {
 			go func(cmd *exec.Cmd, instance int) {
 				defer wg.Done()
 				if err := cmd.Wait(); err != nil {
-					p.logger.DebugContext(ctx, "process wait error",
-						"process", p.config.Name,
-						"instance", instance,
-						"error", err)
+					return
 				}
 			}(cmd, i)
 		} else {
