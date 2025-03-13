@@ -140,6 +140,61 @@ goardian/
 - `numprocs`: Number of process instances to run
 - `exit_codes`: List of normal exit codes that trigger an immediate restart without backoff
 
+## Docker
+
+### Building the Image
+
+To build the Docker image:
+
+```bash
+docker build -t goardian .
+```
+
+### Running the Container
+
+To run the container, you need to provide a configuration file. Mount your config file at runtime:
+
+```bash
+docker run -d \
+  --name goardian \
+  -p 9090:9090 \
+  -v /path/to/your/config.yaml:/config.yaml \
+  goardian
+```
+
+Replace `/path/to/your/config.yaml` with the path to your configuration file on the host machine.
+
+### Example Configuration
+
+Here's an example configuration file (`config.yaml`):
+
+```yaml
+processes:
+  - name: "example-process"
+    command: "/usr/local/bin/example"
+    args: ["--flag", "value"]
+    working_dir: "/app"
+    environment:
+      - "ENV_VAR=value"
+    numprocs: 1
+    start_timeout: "30s"
+    stop_timeout: "10s"
+    restart_delay: "5s"
+    max_restarts: 5
+    backoff_enabled: true
+    backoff_factor: 1.5
+    backoff_max_delay: "1m"
+    exit_codes: [0]
+```
+
+### Container Features
+
+- Minimal image size using multi-stage builds
+- Statically linked binary for better security
+- No shell or OS utilities (scratch base image)
+- Metrics exposed on port 9090
+- Configuration mounted at runtime
+
 ## License
 
 GNU General Public License v3.0 (GPL-3.0) 
