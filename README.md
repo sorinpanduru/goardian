@@ -1,125 +1,145 @@
 # Goardian
 
-A process supervisor written in Go that manages and monitors subprocesses with configurable restart strategies and output handling.
+Goardian is a process supervisor and monitoring tool written in Go. It provides a robust way to manage and monitor multiple processes, with features like automatic restarts, graceful shutdowns, and Prometheus metrics integration.
 
 ## Features
 
-- YAML-based configuration
-- Process monitoring and automatic restart
-- Configurable backoff strategy for restarts
-- Maximum restart limit
+- Process supervision with automatic restarts
+- Multiple process instances support
+- Graceful shutdown handling
+- Prometheus metrics for monitoring
+- Configurable process environment and working directory
+- Support for normal exit codes
+- Process runtime tracking
+- Memory usage monitoring
 - Structured logging with color-coded output
 - Subprocess output capture and logging
-- Graceful shutdown handling
 
 ## Installation
 
 ```bash
-go install github.com/sorinpanduru/goardian@latest
+go install github.com/sorinpanduru/goardian/cmd/goardian@latest
 ```
 
 ## Usage
+
+Create a configuration file (e.g., `config.yaml`):
+
+```yaml
+log_format: "console"  # or "json" for JSON format
+metrics_addr: ":9090"
+shutdown_delay: "10s"
+
+processes:
+  - name: "web-server"
+    command: "python"
+    args: ["app.py"]
+    working_dir: "/app"
+    environment:
+      - "PYTHONPATH=/app"
+    start_timeout: "30s"
+    stop_timeout: "10s"
+    restart_delay: "5s"
+    max_restarts: 5
+    numprocs: 2
+    exit_codes: [0, 1]  # These exit codes will trigger an immediate restart without backoff
+```
+
+Run Goardian:
 
 ```bash
 goardian -config config.yaml
 ```
 
-## Configuration
+## Logging
 
-The configuration file is in YAML format. Here's an example with all available options:
+Goardian provides structured logging with two output formats:
+
+### Console Format
+When `log_format: "console"` is set, logs are displayed with:
+- Color-coded log levels (green for INFO, red for ERROR, yellow for WARN, gray for DEBUG)
+- Timestamp in readable format
+- Process name and instance information
+- Structured attributes for additional context
+- Subprocess output capture with stream type (stdout/stderr)
+
+Example console output:
+```
+[2024-03-21 10:00:00] INFO: process started
+  process=web-server instances=2
+
+[2024-03-21 10:00:01] INFO: process output
+  process=web-server stream=stdout instance=0 type=subprocess_output
+  Starting server on port 8080
+```
+
+### JSON Format
+When `log_format: "json"` is set, logs are output in JSON format for machine parsing:
+```json
+{"time":"2024-03-21T10:00:00Z","level":"info","msg":"process started","process":"web-server","instances":2}
+```
+
+## Metrics
+
+Goardian exposes the following Prometheus metrics at the `/metrics` endpoint:
+
+- `goardian_process_restarts_total`: Counter of process restarts
+- `goardian_process_uptime_seconds`: Gauge showing process uptime
+- `goardian_process_memory_bytes`: Gauge showing process memory usage
+- `goardian_process_status`: Gauge showing process status (1=running, 0=stopped)
+- `goardian_process_runtime_seconds`: Histogram of process runtime durations
+
+Example Prometheus configuration:
 
 ```yaml
-processes:
-  - name: "web-server"
-    command: "/usr/local/bin/nginx"
-    args: ["-c", "/etc/nginx/nginx.conf"]
-    start_timeout: "5s"
-    restart_delay: "5s"
-    max_restarts: 5
-    working_dir: "/var/www"
-    environment:
-      - "ENV=production"
-      - "PORT=8080"
-    backoff_enabled: true
-    backoff_factor: 2.0
-    backoff_max_delay: "1m"
-
-  - name: "api-service"
-    command: "/usr/local/bin/api-server"
-    args: ["--port", "3000"]
-    start_timeout: "3s"
-    restart_delay: "3s"
-    max_restarts: 3
-    working_dir: "/opt/api"
-    environment:
-      - "NODE_ENV=production"
-      - "DB_HOST=localhost"
-    backoff_enabled: true
-    backoff_factor: 1.5
-    backoff_max_delay: "30s"
+scrape_configs:
+  - job_name: 'goardian'
+    static_configs:
+      - targets: ['localhost:9090']
 ```
 
-### Configuration Options
+## Project Structure
 
-- `name`: Unique identifier for the process
-- `command`: Path to the executable
-- `args`: Command line arguments
-- `start_timeout`: How long to wait for process to start
-- `restart_delay`: Initial delay between restart attempts
-- `max_restarts`: Maximum number of restart attempts
+```
+goardian/
+├── cmd/
+│   └── goardian/
+│       └── main.go           # Main entry point
+├── internal/
+│   ├── config/
+│   │   └── config.go        # Configuration handling
+│   ├── logger/
+│   │   └── logger.go        # Structured logging with color support
+│   ├── metrics/
+│   │   └── metrics.go       # Prometheus metrics
+│   └── process/
+│       └── process.go       # Process management
+├── go.mod
+└── README.md
+```
+
+## Configuration
+
+### Global Configuration
+
+- `log_format`: Log output format ("json" or "console")
+- `metrics_addr`: Address to expose Prometheus metrics
+- `shutdown_delay`: How long to wait for processes to shutdown
+
+### Process Configuration
+
+- `name`: Process name (used in logs and metrics)
+- `command`: Command to execute
+- `args`: Command arguments
 - `working_dir`: Working directory for the process
-- `environment`: List of environment variables
-- `backoff_enabled`: Enable exponential backoff for restarts
-- `backoff_factor`: Multiplier for the backoff delay
-- `backoff_max_delay`: Maximum delay between restarts
-
-## Output Examples
-
-### Process Management Logs
-
-```
-2024-03-21 14:30:45.123 level=INFO msg="started process" process=web-server
-2024-03-21 14:30:45.234 level=INFO msg="started process" process=api-service
-2024-03-21 14:30:46.345 level=ERROR msg="failed to start process" process=web-server error="command not found"
-2024-03-21 14:30:46.456 level=INFO msg="waiting before next restart attempt" process=web-server delay=5s
-2024-03-21 14:30:51.567 level=INFO msg="successfully restarted process" process=web-server
-2024-03-21 14:30:52.678 level=INFO msg="process reached maximum restart limit" process=api-service max_restarts=3
-2024-03-21 14:30:53.789 level=INFO msg="received shutdown signal, initiating graceful shutdown"
-2024-03-21 14:30:53.890 level=INFO msg="stopping all processes"
-2024-03-21 14:30:53.901 level=INFO msg="shutdown complete"
-```
-
-### Subprocess Output Logs
-
-```
-2024-03-21 14:30:45.123 level=INFO msg="nginx: the configuration file /etc/nginx/nginx.conf syntax is ok" process=web-server stream=stdout type=subprocess_output
-2024-03-21 14:30:45.234 level=INFO msg="nginx: configuration file /etc/nginx/nginx.conf test is successful" process=web-server stream=stdout type=subprocess_output
-2024-03-21 14:30:45.345 level=INFO msg="Starting API server on port 3000" process=api-service stream=stdout type=subprocess_output
-2024-03-21 14:30:45.456 level=INFO msg="Connected to database at localhost" process=api-service stream=stdout type=subprocess_output
-2024-03-21 14:30:46.567 level=INFO msg="Error: Failed to connect to database" process=api-service stream=stderr type=subprocess_output
-```
-
-## Log Format
-
-Each log line follows this format:
-```
-timestamp level=LEVEL msg="message" [attributes...]
-```
-
-### Log Levels
-- `INFO`: Green
-- `WARN`: Yellow
-- `ERROR`: Red
-- `DEBUG`: Default color
-
-### Common Attributes
-- `process`: Name of the process
-- `stream`: For subprocess output, either "stdout" or "stderr"
-- `type`: For subprocess output, set to "subprocess_output"
-- `error`: Error message when applicable
-- `delay`: Delay duration for restart attempts
-- `max_restarts`: Maximum number of restart attempts
+- `environment`: Environment variables
+- `start_timeout`: How long to wait for process to start
+- `stop_timeout`: How long to wait for process to stop
+- `restart_delay`: Delay between restarts
+- `max_restarts`: Maximum number of restarts before giving up
+- `numprocs`: Number of process instances to run
+- `exit_codes`: List of normal exit codes that trigger an immediate restart without backoff
 
 ## License
 
-GNU General Public License v3.0 
+MIT License 

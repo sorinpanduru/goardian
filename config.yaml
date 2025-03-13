@@ -1,14 +1,23 @@
+# Global configuration
+log_format: "console"  # or "json"
+metrics_addr: ":9090"
+shutdown_delay: "30s"  # How long to wait for all processes to shutdown
+
+# Process configurations
 processes:
-  - name: "example-service"
+  - name: "echo-sleep"
     command: "/bin/sh"
-    args: ["-c", "echo 'running'; sleep 3; exit 0"]
-    start_timeout: "1s"
-    restart_delay: "5s"
-    max_restarts: 5
-    working_dir: "/Users/sorin.panduru/work/go/goardian"
+    args: ["-c", "sleep 3; echo 'running'; exit 0;"]
+    working_dir: "."
     environment:
-      - "ENV=production"
-      - "DEBUG=false"
+      - "APP_ENV=prod"
+      - "APP_DEBUG=0"
+    numprocs: 2  # Run 2 instances of this process
+    start_timeout: "1s"
+    stop_timeout: "3s"
+    restart_delay: "3s"
+    max_restarts: 10
     backoff_enabled: true
-    backoff_factor: 2.0
-    backoff_max_delay: "1m" 
+    backoff_factor: 1.5
+    backoff_max_delay: "1m"
+    exit_codes: [0, 143]  # Consider exit codes 0 (success) and 143 (SIGTERM) as normal
