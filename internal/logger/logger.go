@@ -62,7 +62,7 @@ func (h *consoleHandler) Handle(ctx context.Context, r slog.Record) error {
 	levelColor := getLevelColor(r.Level)
 
 	// Format: [TIME] LEVEL: message
-	msg := fmt.Sprintf("[%s] %s%s%s: %s\n",
+	msg := fmt.Sprintf("[%s] %s%s%s: %s",
 		r.Time.Format("2006-01-02 15:04:05"),
 		levelColor,
 		strings.ToUpper(level),

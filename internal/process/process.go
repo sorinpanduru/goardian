@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -36,6 +35,10 @@ func New(cfg config.ProcessConfig, metrics *metrics.MetricsCollector, log *logge
 func (p *Process) Start(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 
 	// Clear any existing instances
 	p.cmd = make([]*exec.Cmd, p.config.NumProcs)
@@ -162,64 +165,151 @@ func (p *Process) Stop(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// First try graceful shutdown with SIGTERM
 	for _, cmd := range p.cmd {
 		if cmd != nil && cmd.Process != nil {
-			if err := cmd.Process.Signal(os.Interrupt); err != nil {
-				return fmt.Errorf("failed to send interrupt signal: %w", err)
+			if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				p.logger.WarnContext(ctx, "failed to send SIGTERM",
+					"process", p.config.Name,
+					"pid", cmd.Process.Pid,
+					"error", err)
 			}
 		}
 	}
 
-	// Wait for processes to stop
+	// Wait for processes to stop gracefully
+	var wg sync.WaitGroup
+	wg.Add(len(p.cmd))
+
+	// Start waiting for all processes in parallel
+	for i, cmd := range p.cmd {
+		if cmd != nil {
+			go func(cmd *exec.Cmd, instance int) {
+				defer wg.Done()
+				if err := cmd.Wait(); err != nil {
+					p.logger.DebugContext(ctx, "process wait error",
+						"process", p.config.Name,
+						"instance", instance,
+						"error", err)
+				}
+			}(cmd, i)
+		} else {
+			wg.Done()
+		}
+	}
+
+	// Create a channel to signal when all processes are done
 	done := make(chan struct{})
 	go func() {
-		for _, cmd := range p.cmd {
-			if cmd != nil {
-				cmd.Wait()
-			}
-		}
+		wg.Wait()
 		close(done)
 	}()
 
+	// Wait for either all processes to stop or timeout
 	select {
 	case <-done:
 		p.metrics.RecordStop(p.config.Name)
+		p.logger.InfoContext(ctx, "all processes stopped gracefully",
+			"process", p.config.Name)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-time.After(p.config.StopTimeout):
-		return fmt.Errorf("timeout waiting for process to stop")
+		p.logger.WarnContext(ctx, "graceful shutdown failed, sending SIGKILL",
+			"process", p.config.Name)
+
+		// Send SIGKILL to all remaining processes
+		for _, cmd := range p.cmd {
+			if cmd != nil && cmd.Process != nil {
+				if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
+					p.logger.WarnContext(ctx, "failed to send SIGKILL",
+						"process", p.config.Name,
+						"pid", cmd.Process.Pid,
+						"error", err)
+				}
+			}
+		}
+
+		// Wait for all processes to finish after SIGKILL
+		killDone := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(killDone)
+		}()
+
+		select {
+		case <-killDone:
+			p.metrics.RecordStop(p.config.Name)
+			p.logger.InfoContext(ctx, "all processes stopped after SIGKILL",
+				"process", p.config.Name)
+			return nil
+		case <-time.After(5 * time.Second):
+			return fmt.Errorf("processes still running after SIGKILL")
+		}
 	}
 }
 
 func (p *Process) Monitor(ctx context.Context) error {
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-p.done:
-			return nil
-		case <-time.After(time.Second):
-			p.mu.RLock()
-			cmd := p.cmd[0] // Monitor first instance
-			p.mu.RUnlock()
+		p.mu.RLock()
+		// Check if any processes are running
+		anyRunning := false
+		for _, cmd := range p.cmd {
+			if cmd != nil && cmd.Process != nil {
+				anyRunning = true
+				break
+			}
+		}
+		p.mu.RUnlock()
 
+		if !anyRunning {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-p.done:
+				return nil
+			case <-time.After(time.Second):
+				continue
+			}
+		}
+
+		// Create channels to receive process exits for all instances
+		exitChans := make([]chan error, len(p.cmd))
+		for i := range exitChans {
+			exitChans[i] = make(chan error, 1)
+		}
+
+		// Start monitoring all processes
+		for i, cmd := range p.cmd {
 			if cmd == nil || cmd.Process == nil {
 				continue
 			}
 
-			// Check if process is still running by attempting to get its state
-			_, err := cmd.Process.Wait()
+			go func(cmd *exec.Cmd, exitChan chan<- error, instance int) {
+				_, err := cmd.Process.Wait()
+				exitChan <- err
+			}(cmd, exitChans[i], i)
+		}
+
+		// Wait for any process to exit or context cancellation
+		select {
+		case <-ctx.Done():
+			p.Stop(ctx)
+			return ctx.Err()
+		case <-p.done:
+			return nil
+		case err := <-mergeErrorChannels(exitChans):
+			// Process has exited
+			p.mu.Lock()
+			p.cmd = nil
+			p.mu.Unlock()
+
+			// Record the stop in metrics
+			p.metrics.RecordStop(p.config.Name)
+
+			// Check if this was a normal exit
 			if err == nil {
-				// Process has exited successfully (code 0)
-				p.mu.Lock()
-				p.cmd = nil
-				p.mu.Unlock()
-
-				// Record the stop in metrics
-				p.metrics.RecordStop(p.config.Name)
-
-				// Check if this was a normal exit
+				// Process exited successfully (code 0)
 				if p.isNormalExit(0) {
 					// Normal exit - restart immediately without backoff
 					p.logger.InfoContext(ctx, "process exited normally, restarting",
@@ -238,14 +328,6 @@ func (p *Process) Monitor(ctx context.Context) error {
 			// Check if this was an error exit
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				// Process has exited with non-zero code
-				p.mu.Lock()
-				p.cmd = nil
-				p.mu.Unlock()
-
-				// Record the stop in metrics
-				p.metrics.RecordStop(p.config.Name)
-
-				// Check if this was a normal exit
 				if p.isNormalExit(exitErr.ExitCode()) {
 					// Normal exit - restart immediately without backoff
 					p.logger.InfoContext(ctx, "process exited normally, restarting",
@@ -265,6 +347,32 @@ func (p *Process) Monitor(ctx context.Context) error {
 			return fmt.Errorf("error checking process state: %w", err)
 		}
 	}
+}
+
+// mergeErrorChannels merges multiple error channels into a single channel
+func mergeErrorChannels(channels []chan error) chan error {
+	merged := make(chan error, 1)
+	var wg sync.WaitGroup
+	wg.Add(len(channels))
+
+	for _, ch := range channels {
+		go func(ch chan error) {
+			defer wg.Done()
+			if err := <-ch; err != nil {
+				select {
+				case merged <- err:
+				default:
+				}
+			}
+		}(ch)
+	}
+
+	go func() {
+		wg.Wait()
+		close(merged)
+	}()
+
+	return merged
 }
 
 func (p *Process) isNormalExit(code int) bool {

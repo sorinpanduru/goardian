@@ -42,9 +42,8 @@ func main() {
 	// Initialize logger
 	logger := logger.NewLogger(cfg.LogFormat)
 
+	// Initialize metrics collector with custom registry
 	registry := prometheus.NewRegistry()
-
-	// Initialize metrics collector
 	metricsCollector := metrics.NewMetricsCollector()
 	registry.MustRegister(metricsCollector)
 	registry.MustRegister(collectors.NewGoCollector())
@@ -86,15 +85,17 @@ func main() {
 	}
 
 	// Wait for shutdown signal
-	<-sigChan
-	logger.InfoContext(ctx, "shutting down...")
+	sig := <-sigChan
+	logger.InfoContext(ctx, "received shutdown signal", "signal", sig)
 
 	// Create shutdown context with timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.ShutdownDelay)
 	defer shutdownCancel()
 
 	// Stop all processes
+	logger.InfoContext(shutdownCtx, "received shutdown signal, stopping processes")
 	for _, proc := range processes {
+		logger.InfoContext(shutdownCtx, "stopping process", "process", proc.Config().Name)
 		if err := proc.Stop(shutdownCtx); err != nil {
 			logger.ErrorContext(shutdownCtx, "error stopping process",
 				"process", proc.Config().Name,
