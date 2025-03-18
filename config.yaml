@@ -16,7 +16,7 @@ processes:
     start_timeout: "1s"
     stop_timeout: "3s"
     restart_delay: "3s"
-    max_restarts: 10
+    max_restarts: 2
     backoff_enabled: true
     backoff_factor: 1.5
     backoff_max_delay: "1m"
@@ -37,83 +37,83 @@ processes:
     backoff_factor: 1.5
     backoff_max_delay: "1m"
     exit_codes: [0] 
-  # - name: "randomsleeper 0"
-  #   command: "/usr/local/bin/randomsleeper"
-  #   args: ["-processid", "0"]
-  #   working_dir: "."
-  #   environment:
-  #     - "APP_ENV=prod"
-  #     - "APP_DEBUG=0"
-  #   numprocs: 4
-  #   start_timeout: "1s"
-  #   stop_timeout: "3s"
-  #   restart_delay: "3s"
-  #   max_restarts: 10
-  #   backoff_enabled: true
-  #   backoff_factor: 1.5
-  #   backoff_max_delay: "1m"
-  #   exit_codes: [0] 
-  # - name: "randomsleeper 2"
-  #   command: "/usr/local/bin/randomsleeper"
-  #   args: ["-processid", "2"]
-  #   working_dir: "."
-  #   environment:
-  #     - "APP_ENV=prod"
-  #     - "APP_DEBUG=0"
-  #   numprocs: 4
-  #   start_timeout: "1s"
-  #   stop_timeout: "3s"
-  #   restart_delay: "3s"
-  #   max_restarts: 10
-  #   backoff_enabled: true
-  #   backoff_factor: 1.5
-  #   backoff_max_delay: "1m"
-  #   exit_codes: [0] 
-  # - name: "randomsleeper 3"
-  #   command: "/usr/local/bin/randomsleeper"
-  #   args: ["-processid", "3"]
-  #   working_dir: "."
-  #   environment:
-  #     - "APP_ENV=prod"
-  #     - "APP_DEBUG=0"
-  #   numprocs: 4
-  #   start_timeout: "1s"
-  #   stop_timeout: "3s"
-  #   restart_delay: "3s"
-  #   max_restarts: 10
-  #   backoff_enabled: true
-  #   backoff_factor: 1.5
-  #   backoff_max_delay: "1m"
-  #   exit_codes: [0] 
-  # - name: "randomsleeper 4"
-  #   command: "/usr/local/bin/randomsleeper"
-  #   args: ["-processid", "4"]
-  #   working_dir: "."
-  #   environment:
-  #     - "APP_ENV=prod"
-  #     - "APP_DEBUG=0"
-  #   numprocs: 4
-  #   start_timeout: "1s"
-  #   stop_timeout: "3s"
-  #   restart_delay: "3s"
-  #   max_restarts: 10
-  #   backoff_enabled: true 
-  #   backoff_factor: 1.5
-  #   backoff_max_delay: "1m"
-  #   exit_codes: [0] 
-  # - name: "randomsleeper 5"
-  #   command: "/usr/local/bin/randomsleeper"
-  #   args: ["-processid", "5"]
-  #   working_dir: "."
-  #   environment:
-  #     - "APP_ENV=prod"
-  #     - "APP_DEBUG=0"
-  #   numprocs: 4
-  #   start_timeout: "1s"
-  #   stop_timeout: "3s"
-  #   restart_delay: "3s"
-  #   max_restarts: 10
-  #   backoff_enabled: true
-  #   backoff_factor: 1.5
-  #   backoff_max_delay: "1m"
-  #   exit_codes: [0] 
+  - name: "randomsleeper 0"
+    command: "/usr/local/bin/randomsleeper"
+    args: ["-processid", "0"]
+    working_dir: "."
+    environment:
+      - "APP_ENV=prod"
+      - "APP_DEBUG=0"
+    numprocs: 4
+    start_timeout: "1s"
+    stop_timeout: "3s"
+    restart_delay: "3s"
+    max_restarts: 10
+    backoff_enabled: true
+    backoff_factor: 1.5
+    backoff_max_delay: "1m"
+    exit_codes: [0] 
+  - name: "randomsleeper 2"
+    command: "/usr/local/bin/randomsleeper"
+    args: ["-processid", "2"]
+    working_dir: "."
+    environment:
+      - "APP_ENV=prod"
+      - "APP_DEBUG=0"
+    numprocs: 4
+    start_timeout: "1s"
+    stop_timeout: "3s"
+    restart_delay: "3s"
+    max_restarts: 10
+    backoff_enabled: true
+    backoff_factor: 1.5
+    backoff_max_delay: "1m"
+    exit_codes: [0] 
+  - name: "randomsleeper 3"
+    command: "/usr/local/bin/randomsleeper"
+    args: ["-processid", "3"]
+    working_dir: "."
+    environment:
+      - "APP_ENV=prod"
+      - "APP_DEBUG=0"
+    numprocs: 4
+    start_timeout: "1s"
+    stop_timeout: "3s"
+    restart_delay: "3s"
+    max_restarts: 3
+    backoff_enabled: true
+    backoff_factor: 1.5
+    backoff_max_delay: "1m"
+    exit_codes: [0] 
+  - name: "randomsleeper 4"
+    command: "/usr/local/bin/randomsleeper"
+    args: ["-processid", "4"]
+    working_dir: "."
+    environment:
+      - "APP_ENV=prod"
+      - "APP_DEBUG=0"
+    numprocs: 4
+    start_timeout: "1s"
+    stop_timeout: "3s"
+    restart_delay: "3s"
+    max_restarts: 10
+    backoff_enabled: true 
+    backoff_factor: 1.5
+    backoff_max_delay: "1m"
+    exit_codes: [0] 
+  - name: "randomsleeper 5"
+    command: "/usr/local/bin/randomsleeper"
+    args: ["-processid", "5"]
+    working_dir: "."
+    environment:
+      - "APP_ENV=prod"
+      - "APP_DEBUG=0"
+    numprocs: 4
+    start_timeout: "1s"
+    stop_timeout: "3s"
+    restart_delay: "3s"
+    max_restarts: 10
+    backoff_enabled: true
+    backoff_factor: 1.5
+    backoff_max_delay: "1m"
+    exit_codes: [0] 

@@ -45,7 +45,7 @@ var (
 	processStatus = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "goardian_process_status",
-			Help: "Process status (1=running, 0=stopped)",
+			Help: "Process status (2=failed, 1=running, 0=stopped)",
 		},
 		[]string{"name"},
 	)
@@ -53,7 +53,7 @@ var (
 	processInstanceStatus = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "goardian_process_instance_status",
-			Help: "Process instance status (1=running, 0=stopped)",
+			Help: "Process instance status (2=failed, 1=running, 0=stopped)",
 		},
 		[]string{"name", "instance"},
 	)
@@ -128,6 +128,16 @@ func (mc *MetricsCollector) RecordMemoryUsage(name string, instance int, memoryB
 // RecordFailureRestart records a restart due to a failure
 func (mc *MetricsCollector) RecordFailureRestart(name string) {
 	processFailureRestarts.WithLabelValues(name).Inc()
+}
+
+// RecordProcessState records the state of a process (running, stopped, or failed)
+func (mc *MetricsCollector) RecordProcessState(name string, state int) {
+	processStatus.WithLabelValues(name).Set(float64(state))
+}
+
+// RecordInstanceState records the state of a process instance (running, stopped, or failed)
+func (mc *MetricsCollector) RecordInstanceState(name string, instance int, state int) {
+	processInstanceStatus.WithLabelValues(name, fmt.Sprintf("%d", instance)).Set(float64(state))
 }
 
 func (mc *MetricsCollector) Collect(ch chan<- prometheus.Metric) {

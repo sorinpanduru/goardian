@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
@@ -195,7 +196,8 @@ func (s *WSServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 // writePump pumps messages from the hub to the websocket connection
 func (c *Client) writePump() {
-	ticker := time.NewTicker(60 * time.Second)
+	// Send ping every 30 seconds
+	ticker := time.NewTicker(30 * time.Second)
 	defer func() {
 		ticker.Stop()
 		c.Close()
@@ -217,9 +219,9 @@ func (c *Client) writePump() {
 			}
 
 		case <-ticker.C:
-			// Send ping message
+			// Send ping message with current timestamp
 			c.mu.Lock()
-			err := c.conn.WriteMessage(websocket.PingMessage, nil)
+			err := c.conn.WriteMessage(websocket.PingMessage, []byte(time.Now().Format(time.RFC3339)))
 			c.mu.Unlock()
 			if err != nil {
 				return
@@ -234,19 +236,42 @@ func (c *Client) readPump() {
 		c.server.unregister <- c
 	}()
 
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	// Set a shorter read deadline (30 seconds) for faster detection of failed connections
+	c.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		// Reset the read deadline when we receive a pong
+		c.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		return nil
 	})
 
 	for {
-		_, _, err := c.conn.ReadMessage()
+		messageType, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				c.server.logger.ErrorContext(context.Background(), "websocket read error", "error", err)
 			}
 			break
+		}
+
+		// Reset the read deadline on any received message
+		c.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+
+		// Handle client messages (ping messages to keep connection alive)
+		if messageType == websocket.TextMessage {
+			// Try to parse as JSON (for ping messages)
+			var data map[string]interface{}
+			if err := json.Unmarshal(message, &data); err == nil {
+				// Check if it's a ping message
+				if msgType, ok := data["type"].(string); ok && msgType == "ping" {
+					// Respond with a pong message
+					c.mu.Lock()
+					err := c.conn.WriteJSON(map[string]string{"type": "pong", "time": time.Now().Format(time.RFC3339)})
+					c.mu.Unlock()
+					if err != nil {
+						c.server.logger.ErrorContext(context.Background(), "error sending pong response", "error", err)
+					}
+				}
+			}
 		}
 	}
 }

@@ -32,6 +32,8 @@ const (
 	StateRunning ProcessState = iota
 	// StateStopped indicates the process was manually stopped and should not be auto-restarted
 	StateStopped
+	// StateFailed indicates the process has reached max_restarts and will not be restarted
+	StateFailed
 )
 
 // ProcessGroup manages multiple Process instances as replicas of the same service
@@ -302,6 +304,24 @@ func (p *Process) Monitor(ctx context.Context) error {
 					p.consecutiveFailures++
 					p.failureRestarts++
 					p.metrics.RecordFailureRestart(p.groupName)
+
+					// Check if we've reached max_restarts
+					if p.failureRestarts >= p.config.MaxRestarts {
+						p.state = StateFailed
+						p.running = false
+						p.mu.Unlock()
+
+						// Record failed state in metrics
+						p.metrics.RecordInstanceState(p.groupName, p.instanceID, 2)
+
+						p.logger.ErrorContext(ctx, "process instance reached max_restarts, marking as failed",
+							"process", p.groupName,
+							"instance", p.instanceID,
+							"max_restarts", p.config.MaxRestarts,
+							"failure_restarts", p.failureRestarts)
+						return fmt.Errorf("process reached max_restarts (%d)", p.config.MaxRestarts)
+					}
+
 					backoffDuration := p.getBackoffDuration()
 					p.mu.Unlock()
 
@@ -452,6 +472,9 @@ func (p *Process) Start(ctx context.Context) error {
 	p.startTime = time.Now()       // Record process start time
 	p.mu.Unlock()
 
+	// Record state change in metrics
+	p.metrics.RecordInstanceState(p.groupName, p.instanceID, 1)
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -587,6 +610,9 @@ func (p *Process) Stop(ctx context.Context) error {
 			close(p.done)
 		})
 		p.mu.Unlock()
+
+		// Record state change in metrics
+		p.metrics.RecordInstanceState(p.groupName, p.instanceID, 0)
 
 		// Notify about state change if there was a change
 		if wasRunning && p.StateChanged != nil {

@@ -107,19 +107,32 @@ const ProcessCard = ({ group, onStart, onStop, onRestart }) => {
 const App = () => {
     const [processes, setProcesses] = React.useState([]);
     const [error, setError] = React.useState(null);
+    const [wsStatus, setWsStatus] = React.useState('connecting');
     const wsRef = React.useRef(null);
+    const reconnectTimeoutRef = React.useRef(null);
+    const reconnectAttemptsRef = React.useRef(0);
 
-    // Connect to WebSocket and fetch initial data
-    React.useEffect(() => {
-        // Fetch initial process state
-        fetch('/api/processes')
-            .then(res => res.json())
-            .then(data => setProcesses(data))
-            .catch(err => setError('Failed to load processes'));
+    // Function to establish WebSocket connection
+    const connectWebSocket = React.useCallback(() => {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            return; // Already connected
+        }
 
-        // Connect to WebSocket for real-time updates
+        // Clear any existing reconnection timeouts
+        if (reconnectTimeoutRef.current) {
+            clearTimeout(reconnectTimeoutRef.current);
+            reconnectTimeoutRef.current = null;
+        }
+
+        setWsStatus('connecting');
         const ws = new WebSocket(`ws://${window.location.host}/ws`);
         wsRef.current = ws;
+
+        ws.onopen = () => {
+            setWsStatus('connected');
+            setError(null);
+            reconnectAttemptsRef.current = 0; // Reset reconnect attempts on successful connection
+        };
 
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
@@ -153,13 +166,65 @@ const App = () => {
         };
 
         ws.onerror = () => {
-            setError('WebSocket connection failed');
+            setWsStatus('error');
+            setError('WebSocket connection error. Attempting to reconnect...');
         };
 
-        return () => {
-            if (ws) ws.close();
+        ws.onclose = () => {
+            setWsStatus('disconnected');
+            
+            // Implement exponential backoff for reconnection
+            const maxReconnectDelay = 30000; // Maximum 30 seconds
+            const baseDelay = 1000; // Start with 1 second
+            reconnectAttemptsRef.current += 1;
+            
+            // Calculate delay with exponential backoff (2^attempts * baseDelay)
+            const delay = Math.min(
+                maxReconnectDelay, 
+                Math.pow(2, Math.min(reconnectAttemptsRef.current, 5)) * baseDelay
+            );
+            
+            // Add jitter to prevent all clients reconnecting simultaneously
+            const jitteredDelay = delay * (0.8 + Math.random() * 0.4);
+            
+            setError(`WebSocket disconnected. Reconnecting in ${Math.round(jitteredDelay/1000)}s...`);
+            
+            // Schedule reconnection
+            reconnectTimeoutRef.current = setTimeout(() => {
+                connectWebSocket();
+            }, jitteredDelay);
         };
     }, []);
+
+    // Connect to WebSocket and fetch initial data
+    React.useEffect(() => {
+        // Fetch initial process state
+        fetch('/api/processes')
+            .then(res => res.json())
+            .then(data => setProcesses(data))
+            .catch(err => setError('Failed to load processes'));
+
+        // Initial WebSocket connection
+        connectWebSocket();
+
+        // Ping to keep connection alive (every 30 seconds)
+        const pingInterval = setInterval(() => {
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 30000);
+
+        // Cleanup function
+        return () => {
+            clearInterval(pingInterval);
+            if (reconnectTimeoutRef.current) {
+                clearTimeout(reconnectTimeoutRef.current);
+            }
+            if (wsRef.current) {
+                wsRef.current.close();
+            }
+        };
+    }, [connectWebSocket]);
 
     // Process control functions
     const handleStart = async (groupName) => {
@@ -191,6 +256,15 @@ const App = () => {
             <header className="mb-8">
                 <h1 className="text-3xl font-bold text-gray-900">Goardian Dashboard</h1>
                 <p className="text-gray-600">Process Management Interface</p>
+                <div className={`mt-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                    wsStatus === 'connected' ? 'bg-green-100 text-green-800' : 
+                    wsStatus === 'connecting' ? 'bg-yellow-100 text-yellow-800' : 
+                    'bg-red-100 text-red-800'
+                }`}>
+                    {wsStatus === 'connected' ? 'Connected' : 
+                     wsStatus === 'connecting' ? 'Connecting...' : 
+                     'Disconnected'}
+                </div>
             </header>
 
             {error && (
@@ -219,6 +293,34 @@ const getMemoryColor = (memoryMB) => {
     if (memoryMB < 50) return 'bg-green-500';
     if (memoryMB < 200) return 'bg-yellow-500';
     return 'bg-red-500';
+};
+
+// Helper function to get status color
+const getStatusColor = (status) => {
+    switch (status) {
+        case 1:
+            return 'bg-green-100 text-green-800';
+        case 0:
+            return 'bg-gray-100 text-gray-800';
+        case 2:
+            return 'bg-red-100 text-red-800';
+        default:
+            return 'bg-gray-100 text-gray-800';
+    }
+};
+
+// Helper function to get status text
+const getStatusText = (status) => {
+    switch (status) {
+        case 1:
+            return 'Running';
+        case 0:
+            return 'Stopped';
+        case 2:
+            return 'Failed';
+        default:
+            return 'Unknown';
+    }
 };
 
 // Render the app
