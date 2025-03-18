@@ -746,7 +746,187 @@ func (p *Process) Stop(ctx context.Context) error {
 			"error", err)
 	}
 
-	return nil
+	// Non-blocking check if process has already exited
+	select {
+	case <-p.exitChan:
+		p.mu.Lock()
+		wasRunning := p.running
+		p.running = false
+		p.cmd = nil
+		p.closeOnce.Do(func() {
+			close(p.done)
+		})
+		p.mu.Unlock()
+
+		// Notify about state change if there was a change
+		if wasRunning && p.StateChanged != nil {
+			p.StateChanged(p)
+		}
+
+		p.logger.InfoContext(ctx, "process instance stopped immediately",
+			"process", p.groupName,
+			"instance", p.instanceID)
+		return nil
+	case <-time.After(50 * time.Millisecond): // Small delay to give process a chance to exit quickly
+		// Continue if process hasn't exited yet
+	}
+
+	// Periodically check if process has exited without notification
+	stopCheckTicker := time.NewTicker(500 * time.Millisecond)
+	defer stopCheckTicker.Stop()
+
+	timeout := time.After(p.config.StopTimeout)
+
+	// Wait for process to stop gracefully
+	for {
+		select {
+		case <-p.exitChan:
+			p.mu.Lock()
+			wasRunning := p.running
+			p.running = false
+			p.cmd = nil
+			p.closeOnce.Do(func() {
+				close(p.done)
+			})
+			p.mu.Unlock()
+
+			// Notify about state change if there was a change
+			if wasRunning && p.StateChanged != nil {
+				p.StateChanged(p)
+			}
+
+			p.logger.InfoContext(ctx, "process instance stopped gracefully",
+				"process", p.groupName,
+				"instance", p.instanceID)
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-stopCheckTicker.C:
+			// Check if process is still running
+			p.mu.RLock()
+			running := p.running
+			p.mu.RUnlock()
+
+			if !running {
+				p.mu.Lock()
+				p.cmd = nil
+				p.closeOnce.Do(func() {
+					close(p.done)
+				})
+				p.mu.Unlock()
+
+				// Notify about state change
+				if p.StateChanged != nil {
+					p.StateChanged(p)
+				}
+
+				p.logger.InfoContext(ctx, "process instance stopped (detected via check)",
+					"process", p.groupName,
+					"instance", p.instanceID)
+				return nil
+			}
+		case <-timeout:
+			// Try to kill the process with SIGKILL
+			p.mu.RLock()
+			cmd := p.cmd
+			p.mu.RUnlock()
+
+			if cmd != nil && cmd.Process != nil {
+				p.logger.WarnContext(ctx, "graceful shutdown failed, sending SIGKILL",
+					"process", p.groupName,
+					"instance", p.instanceID)
+
+				if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
+					if err.Error() == "os: process already finished" {
+						p.mu.Lock()
+						wasRunning := p.running
+						p.running = false
+						p.cmd = nil
+						p.closeOnce.Do(func() {
+							close(p.done)
+						})
+						p.mu.Unlock()
+
+						// Notify about state change if there was a change
+						if wasRunning && p.StateChanged != nil {
+							p.StateChanged(p)
+						}
+
+						p.logger.InfoContext(ctx, "process instance exited before SIGKILL",
+							"process", p.groupName,
+							"instance", p.instanceID)
+						return nil
+					}
+
+					p.logger.WarnContext(ctx, "failed to send SIGKILL",
+						"process", p.groupName,
+						"instance", p.instanceID,
+						"error", err)
+				}
+
+				// Wait a short time for SIGKILL to take effect
+				select {
+				case <-p.exitChan:
+					p.mu.Lock()
+					wasRunning := p.running
+					p.running = false
+					p.cmd = nil
+					p.closeOnce.Do(func() {
+						close(p.done)
+					})
+					p.mu.Unlock()
+
+					// Notify about state change if there was a change
+					if wasRunning && p.StateChanged != nil {
+						p.StateChanged(p)
+					}
+
+					p.logger.InfoContext(ctx, "process instance stopped after SIGKILL",
+						"process", p.groupName,
+						"instance", p.instanceID)
+					return nil
+				case <-time.After(2 * time.Second):
+					p.mu.Lock()
+					wasRunning := p.running
+					p.running = false
+					p.cmd = nil
+					p.closeOnce.Do(func() {
+						close(p.done)
+					})
+					p.mu.Unlock()
+
+					// Notify about state change if there was a change
+					if wasRunning && p.StateChanged != nil {
+						p.StateChanged(p)
+					}
+
+					p.logger.ErrorContext(ctx, "process instance still running after SIGKILL, giving up",
+						"process", p.groupName,
+						"instance", p.instanceID)
+					return fmt.Errorf("process still running after SIGKILL")
+				}
+			} else {
+				// Process already gone
+				p.mu.Lock()
+				wasRunning := p.running
+				p.running = false
+				p.closeOnce.Do(func() {
+					close(p.done)
+				})
+				p.mu.Unlock()
+
+				// Notify about state change if there was a change
+				if wasRunning && p.StateChanged != nil {
+					p.StateChanged(p)
+				}
+
+				p.logger.InfoContext(ctx, "process instance already exited (pre-SIGKILL check)",
+					"process", p.groupName,
+					"instance", p.instanceID)
+				return nil
+			}
+		}
+	}
 }
 
 // IsRunning checks if a process is running
