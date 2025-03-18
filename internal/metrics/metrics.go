@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -13,6 +14,14 @@ var (
 		prometheus.CounterOpts{
 			Name: "goardian_process_restarts_total",
 			Help: "Total number of process restarts",
+		},
+		[]string{"name"},
+	)
+
+	processFailureRestarts = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "goardian_process_failure_restarts_total",
+			Help: "Total number of process restarts due to failures",
 		},
 		[]string{"name"},
 	)
@@ -39,6 +48,14 @@ var (
 			Help: "Process status (1=running, 0=stopped)",
 		},
 		[]string{"name"},
+	)
+
+	processInstanceStatus = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "goardian_process_instance_status",
+			Help: "Process instance status (1=running, 0=stopped)",
+		},
+		[]string{"name", "instance"},
 	)
 
 	processRuntime = prometheus.NewHistogramVec(
@@ -95,6 +112,24 @@ func (mc *MetricsCollector) RecordStop(name string) {
 	}
 }
 
+func (mc *MetricsCollector) RecordStateChange(name string, instance int, running bool) {
+	status := 0.0
+	if running {
+		status = 1.0
+	}
+	processInstanceStatus.WithLabelValues(name, fmt.Sprintf("%d", instance)).Set(status)
+}
+
+// RecordMemoryUsage records the memory usage for a specific process instance
+func (mc *MetricsCollector) RecordMemoryUsage(name string, instance int, memoryBytes float64) {
+	processMemoryUsage.WithLabelValues(name).Set(memoryBytes)
+}
+
+// RecordFailureRestart records a restart due to a failure
+func (mc *MetricsCollector) RecordFailureRestart(name string) {
+	processFailureRestarts.WithLabelValues(name).Inc()
+}
+
 func (mc *MetricsCollector) Collect(ch chan<- prometheus.Metric) {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
@@ -111,17 +146,21 @@ func (mc *MetricsCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	processRestarts.Collect(ch)
+	processFailureRestarts.Collect(ch)
 	processUptime.Collect(ch)
 	processMemoryUsage.Collect(ch)
 	processStatus.Collect(ch)
+	processInstanceStatus.Collect(ch)
 	processRuntime.Collect(ch)
 }
 
 func (mc *MetricsCollector) Describe(ch chan<- *prometheus.Desc) {
 	processRestarts.Describe(ch)
+	processFailureRestarts.Describe(ch)
 	processUptime.Describe(ch)
 	processMemoryUsage.Describe(ch)
 	processStatus.Describe(ch)
+	processInstanceStatus.Describe(ch)
 	processRuntime.Describe(ch)
 }
 
