@@ -1,8 +1,16 @@
 // ProcessCard component displays information about a single process group
 const ProcessCard = ({ group, onStart, onStop, onRestart }) => {
     const totalInstances = group.processes.length;
-    const runningInstances = group.processes.filter(p => p.running).length;
-    const statusColor = runningInstances === totalInstances ? 'green' : runningInstances === 0 ? 'red' : 'yellow';
+    const runningInstances = group.processes.filter(p => p.state === 0).length;
+    const failedInstances = group.processes.filter(p => p.state === 2).length;
+    
+    // Determine overall status color based on instance states
+    let statusColor = 'green';
+    if (failedInstances > 0) {
+        statusColor = 'red';
+    } else if (runningInstances < totalInstances) {
+        statusColor = 'yellow';
+    }
 
     return (
         <div className="bg-white rounded-lg shadow-md p-6 mb-4">
@@ -39,64 +47,88 @@ const ProcessCard = ({ group, onStart, onStop, onRestart }) => {
                     <p>
                         <span className={`inline-block w-3 h-3 rounded-full bg-${statusColor}-500 mr-2`}></span>
                         {runningInstances}/{totalInstances} running
+                        {failedInstances > 0 && <span className="ml-2 text-red-600">{failedInstances} failed</span>}
                     </p>
                 </div>
             </div>
             <div className="border-t pt-4">
                 <h3 className="text-lg font-semibold mb-2">Instances</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {group.processes.map((proc, idx) => (
-                        <div
-                            key={idx}
-                            className={`p-4 rounded shadow-sm ${proc.running ? 'bg-green-100' : 'bg-red-100'}`}
-                        >
-                            <p className="font-semibold">Instance {proc.instanceId}</p>
-                            <p className={`text-sm ${proc.running ? 'text-green-600' : 'text-red-600'} mb-2`}>
-                                {proc.running ? 'Running' : 'Stopped'}
-                            </p>
-                            
-                            {proc.running && (
-                                <div className="mt-2 space-y-1 text-sm">
-                                    <div className="flex justify-between">
-                                        <span className="text-gray-600">Uptime:</span>
-                                        <span className="font-medium">{proc.uptimeString || '0 sec'}</span>
-                                    </div>
-                                    <div className="flex justify-between">
-                                        <span className="text-gray-600">Memory:</span>
-                                        <span className="font-medium">{proc.memoryString || '0 B'}</span>
-                                    </div>
-                                    {proc.memoryMB > 0 && (
-                                        <div className="mt-1">
-                                            <div className="w-full bg-gray-200 rounded-full h-2">
-                                                <div 
-                                                    className={`h-2 rounded-full ${getMemoryColor(proc.memoryMB)}`}
-                                                    style={{ width: `${Math.min(proc.memoryMB / 10 * 100, 100)}%` }}
-                                                ></div>
-                                            </div>
-                                        </div>
-                                    )}
-                                    {proc.backoffState && proc.backoffState.consecutiveFailures > 0 && (
+                    {group.processes.map((proc, idx) => {
+                        const statusClass = getStatusColor(proc.state);
+                        const statusText = getStatusText(proc.state);
+                        const isRunning = proc.state === 0; // StateRunning = 0
+                        
+                        return (
+                            <div
+                                key={idx}
+                                className={`p-4 rounded shadow-sm ${statusClass}`}
+                            >
+                                <p className="font-semibold">Instance {proc.instanceId}</p>
+                                <p className={`text-sm mb-2`}>
+                                    {statusText}
+                                </p>
+                                
+                                {isRunning && (
+                                    <div className="mt-2 space-y-1 text-sm">
                                         <div className="flex justify-between">
-                                            <span className="text-gray-600">Failures:</span>
-                                            <span className="font-medium text-orange-500">{proc.backoffState.consecutiveFailures}</span>
+                                            <span className="text-gray-600">Uptime:</span>
+                                            <span className="font-medium">{proc.uptimeString || '0 sec'}</span>
                                         </div>
-                                    )}
-                                    {proc.restartStats && (
-                                        <div className="mt-2 space-y-1">
-                                            <div className="flex justify-between">
-                                                <span className="text-gray-600">Total Restarts:</span>
-                                                <span className="font-medium">{proc.restartStats.totalRestarts}</span>
-                                            </div>
-                                            <div className="flex justify-between">
-                                                <span className="text-gray-600">Failure Restarts:</span>
-                                                <span className="font-medium text-red-500">{proc.restartStats.failureRestarts}</span>
-                                            </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-gray-600">Memory:</span>
+                                            <span className="font-medium">{proc.memoryString || '0 B'}</span>
                                         </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    ))}
+                                        {proc.memoryMB > 0 && (
+                                            <div className="mt-1">
+                                                <div className="w-full bg-gray-200 rounded-full h-2">
+                                                    <div 
+                                                        className={`h-2 rounded-full ${getMemoryColor(proc.memoryMB)}`}
+                                                        style={{ width: `${Math.min(proc.memoryMB / 10 * 100, 100)}%` }}
+                                                    ></div>
+                                                </div>
+                                            </div>
+                                        )}
+                                        {proc.backoffState && proc.backoffState.consecutiveFailures > 0 && (
+                                            <div className="flex justify-between">
+                                                <span className="text-gray-600">Failures:</span>
+                                                <span className="font-medium text-orange-500">{proc.backoffState.consecutiveFailures}</span>
+                                            </div>
+                                        )}
+                                        {proc.restartStats && (
+                                            <div className="mt-2 space-y-1">
+                                                <div className="flex justify-between">
+                                                    <span className="text-gray-600">Total Restarts:</span>
+                                                    <span className="font-medium">{proc.restartStats.totalRestarts}</span>
+                                                </div>
+                                                <div className="flex justify-between">
+                                                    <span className="text-gray-600">Failure Restarts:</span>
+                                                    <span className="font-medium text-red-500">{proc.restartStats.failureRestarts}</span>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                                
+                                {proc.state === 2 && proc.restartStats && (
+                                    <div className="mt-2 space-y-1 text-sm">
+                                        <div className="flex justify-between">
+                                            <span className="text-gray-600">Max Restarts:</span>
+                                            <span className="font-medium text-red-500">Reached</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-gray-600">Total Restarts:</span>
+                                            <span className="font-medium">{proc.restartStats.totalRestarts}</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-gray-600">Failure Restarts:</span>
+                                            <span className="font-medium text-red-500">{proc.restartStats.failureRestarts}</span>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
         </div>
@@ -137,6 +169,9 @@ const App = () => {
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
             if (data.type === 'process_state') {
+                // Debug log the state value
+                console.log(`Process state update - Group: ${data.group}, Instance: ${data.process}, State: ${data.data.state}`);
+                
                 setProcesses(prev => prev.map(group => {
                     if (group.name === data.group) {
                         return {
@@ -146,6 +181,7 @@ const App = () => {
                                     return { 
                                         ...proc, 
                                         running: data.data.running,
+                                        state: data.data.state,
                                         uptime: data.data.uptime,
                                         uptimeString: data.data.uptimeString,
                                         memoryBytes: data.data.memoryBytes,
@@ -207,12 +243,12 @@ const App = () => {
         // Initial WebSocket connection
         connectWebSocket();
 
-        // Ping to keep connection alive (every 30 seconds)
+        // Ping to keep connection alive (every 15 seconds)
         const pingInterval = setInterval(() => {
             if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                 wsRef.current.send(JSON.stringify({ type: 'ping' }));
             }
-        }, 30000);
+        }, 15000);
 
         // Cleanup function
         return () => {
@@ -298,11 +334,11 @@ const getMemoryColor = (memoryMB) => {
 // Helper function to get status color
 const getStatusColor = (status) => {
     switch (status) {
-        case 1:
+        case 0:  // StateRunning
             return 'bg-green-100 text-green-800';
-        case 0:
+        case 1:  // StateStopped
             return 'bg-gray-100 text-gray-800';
-        case 2:
+        case 2:  // StateFailed
             return 'bg-red-100 text-red-800';
         default:
             return 'bg-gray-100 text-gray-800';
@@ -312,11 +348,11 @@ const getStatusColor = (status) => {
 // Helper function to get status text
 const getStatusText = (status) => {
     switch (status) {
-        case 1:
+        case 0:  // StateRunning
             return 'Running';
-        case 0:
+        case 1:  // StateStopped
             return 'Stopped';
-        case 2:
+        case 2:  // StateFailed
             return 'Failed';
         default:
             return 'Unknown';

@@ -189,6 +189,7 @@ func (s *Server) handleGetProcesses(w http.ResponseWriter, r *http.Request) {
 					"uptime":       uptimeSeconds,
 					"uptimeString": FormatUptime(uptimeSeconds),
 					"startTime":    proc.GetStartTime().Format(time.RFC3339),
+					"state":        proc.GetState(),
 				}
 
 				if proc.IsRunning() {
@@ -198,6 +199,11 @@ func (s *Server) handleGetProcesses(w http.ResponseWriter, r *http.Request) {
 				// Add backoff state if available
 				if backoffState := proc.GetBackoffState(); backoffState != nil {
 					procInfo["backoffState"] = backoffState
+				}
+
+				// Add restart statistics if available
+				if restartStats := proc.GetRestartStats(); restartStats != nil {
+					procInfo["restartStats"] = restartStats
 				}
 
 				groupInfo["processes"] = append(groupInfo["processes"].([]map[string]interface{}), procInfo)
@@ -254,6 +260,7 @@ func (s *Server) handleGetProcessGroup(w http.ResponseWriter, r *http.Request) {
 				"uptime":       uptimeSeconds,
 				"uptimeString": FormatUptime(uptimeSeconds),
 				"startTime":    proc.GetStartTime().Format(time.RFC3339),
+				"state":        proc.GetState(),
 			}
 
 			if proc.IsRunning() {
@@ -263,6 +270,11 @@ func (s *Server) handleGetProcessGroup(w http.ResponseWriter, r *http.Request) {
 			// Add backoff state if available
 			if backoffState := proc.GetBackoffState(); backoffState != nil {
 				procInfo["backoffState"] = backoffState
+			}
+
+			// Add restart statistics if available
+			if restartStats := proc.GetRestartStats(); restartStats != nil {
+				procInfo["restartStats"] = restartStats
 			}
 
 			response["processes"] = append(response["processes"].([]map[string]interface{}), procInfo)
@@ -285,6 +297,11 @@ func (s *Server) handleStartProcess(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Process group not found", http.StatusNotFound)
 		return
 	}
+
+	// Reset restart counters on manual start
+	group.ResetRestartCounters()
+	s.logger.InfoContext(r.Context(), "manual start requested, reset restart counters",
+		"process", groupName)
 
 	if err := group.Start(r.Context()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -323,6 +340,11 @@ func (s *Server) handleStopProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reset restart counters on manual stop
+	group.ResetRestartCounters()
+	s.logger.InfoContext(r.Context(), "manual stop requested, reset restart counters",
+		"process", groupName)
+
 	if err := group.Stop(r.Context()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -351,6 +373,11 @@ func (s *Server) handleRestartProcess(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Process group not found", http.StatusNotFound)
 		return
 	}
+
+	// Reset restart counters on manual restart
+	group.ResetRestartCounters()
+	s.logger.InfoContext(r.Context(), "manual restart requested, reset restart counters",
+		"process", groupName)
 
 	if err := group.Stop(r.Context()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -387,7 +414,7 @@ func (s *Server) handleRestartProcess(w http.ResponseWriter, r *http.Request) {
 
 // startPeriodicMetricsUpdate broadcasts process metrics updates periodically
 func (s *Server) startPeriodicMetricsUpdate(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {

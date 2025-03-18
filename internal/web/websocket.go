@@ -131,6 +131,7 @@ func (s *WSServer) BroadcastProcessState(group string, proc *process.Process) {
 		"uptimeString": FormatUptime(uptimeSeconds),
 		"memoryString": FormatMemorySize(memoryBytes),
 		"startTime":    proc.GetStartTime().Format(time.RFC3339),
+		"state":        proc.GetState(),
 	}
 
 	// Add backoff state if available
@@ -196,8 +197,8 @@ func (s *WSServer) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 // writePump pumps messages from the hub to the websocket connection
 func (c *Client) writePump() {
-	// Send ping every 30 seconds
-	ticker := time.NewTicker(30 * time.Second)
+	// Send ping every 15 seconds
+	ticker := time.NewTicker(15 * time.Second)
 	defer func() {
 		ticker.Stop()
 		c.Close()
@@ -236,11 +237,11 @@ func (c *Client) readPump() {
 		c.server.unregister <- c
 	}()
 
-	// Set a shorter read deadline (30 seconds) for faster detection of failed connections
-	c.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	// Set a shorter read deadline (20 seconds) for faster detection of failed connections
+	c.conn.SetReadDeadline(time.Now().Add(20 * time.Second))
 	c.conn.SetPongHandler(func(string) error {
 		// Reset the read deadline when we receive a pong
-		c.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		c.conn.SetReadDeadline(time.Now().Add(20 * time.Second))
 		return nil
 	})
 

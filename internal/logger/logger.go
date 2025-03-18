@@ -76,8 +76,10 @@ func (h *consoleHandler) Handle(ctx context.Context, r slog.Record) error {
 			attrs = append(attrs, fmt.Sprintf("%s=%v", a.Key, a.Value.Any()))
 			return true
 		})
-		msg += "  " + strings.Join(attrs, " ") + "\n"
+		msg += "  " + strings.Join(attrs, " ")
 	}
+
+	msg += "\n"
 
 	_, err := h.writer.Write([]byte(msg))
 	return err

@@ -410,6 +410,12 @@ func (p *Process) Monitor(ctx context.Context) error {
 func (pg *ProcessGroup) Monitor(ctx context.Context) error {
 	for _, proc := range pg.processes {
 		if proc != nil {
+			// Log the initial state for debugging
+			pg.logger.InfoContext(ctx, "monitoring process with initial state",
+				"process", pg.config.Name,
+				"instance", proc.instanceID,
+				"state", proc.GetState())
+
 			go func(p *Process) {
 				if err := p.Monitor(ctx); err != nil {
 					pg.logger.ErrorContext(ctx, "process monitoring error",
@@ -423,7 +429,7 @@ func (pg *ProcessGroup) Monitor(ctx context.Context) error {
 
 	// Start a goroutine to periodically update memory usage
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 
 		for {
@@ -1156,5 +1162,38 @@ func (p *Process) GetRestartStats() map[string]interface{} {
 	return map[string]interface{}{
 		"totalRestarts":   p.totalRestarts,
 		"failureRestarts": p.failureRestarts,
+	}
+}
+
+// GetState returns the current state of the process
+func (p *Process) GetState() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return int(p.state)
+}
+
+// ResetRestartCounters resets the restart counters
+func (p *Process) ResetRestartCounters() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.totalRestarts = 0
+	p.failureRestarts = 0
+	p.consecutiveFailures = 0
+}
+
+// ResetRestartCounters resets the restart counters for all processes in the group
+func (pg *ProcessGroup) ResetRestartCounters() {
+	pg.logger.InfoContext(context.Background(), "resetting restart counters",
+		"process", pg.config.Name)
+
+	pg.mu.RLock()
+	processes := make([]*Process, len(pg.processes))
+	copy(processes, pg.processes)
+	pg.mu.RUnlock()
+
+	for _, proc := range processes {
+		if proc != nil {
+			proc.ResetRestartCounters()
+		}
 	}
 }
