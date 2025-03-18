@@ -1,4 +1,4 @@
-# Goardian
+# <img src="logo.png" alt="Goardian Logo" width="24" height="24" style="vertical-align: middle;"> Goardian
 
 Goardian is a process supervisor and monitoring tool written in Go. It provides a robust way to manage and monitor multiple processes, with features like automatic restarts, graceful shutdowns, Prometheus metrics integration, and a responsive web dashboard.
 
