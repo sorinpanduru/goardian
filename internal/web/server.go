@@ -111,6 +111,18 @@ func (s *Server) Start(ctx context.Context) error {
 			return
 		}
 
+		// Serve favicon.png
+		if r.URL.Path == "/favicon.ico" {
+			content, err := staticFiles.ReadFile("static/favicon.png")
+			if err != nil {
+				http.Error(w, "Failed to read favicon", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "image/png")
+			w.Write(content)
+			return
+		}
+
 		// For .js files, set the correct content type
 		if strings.HasSuffix(r.URL.Path, ".js") {
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
