@@ -60,10 +60,13 @@ func main() {
 		}
 	}()
 
-	// Create and start processes
-	processes := make([]*process.Process, len(cfg.Processes))
+	// Start all processes
+	logger.InfoContext(ctx, "starting processes")
+
+	// Create and start process groups
+	processes := make([]*process.ProcessGroup, len(cfg.Processes))
 	for i, procCfg := range cfg.Processes {
-		proc := process.New(procCfg, metricsCollector, logger)
+		proc := process.NewProcessGroup(procCfg, metricsCollector, logger)
 		processes[i] = proc
 		metricsCollector.Register(procCfg.Name)
 
@@ -75,7 +78,7 @@ func main() {
 		}
 
 		// Monitor process in background
-		go func(p *process.Process) {
+		go func(p *process.ProcessGroup) {
 			if err := p.Monitor(ctx); err != nil {
 				logger.ErrorContext(ctx, "process monitoring error",
 					"process", p.Config().Name,
