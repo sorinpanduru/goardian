@@ -109,7 +109,7 @@ When `log_format: "json"` is set, logs are output in JSON format for machine par
 {"time":"2024-03-21T10:00:00Z","level":"info","msg":"process started","process":"web-server","instances":2}
 ```
 
-## Metrics
+## <img src="logo.png" alt="Goardian Logo" width="20" height="20" style="vertical-align: middle;"> Metrics
 
 Goardian exposes the following Prometheus metrics at the `/metrics` endpoint:
 
@@ -117,8 +117,8 @@ Goardian exposes the following Prometheus metrics at the `/metrics` endpoint:
 - `goardian_process_failure_restarts_total`: Counter of process restarts due to failures
 - `goardian_process_uptime_seconds`: Gauge showing process uptime
 - `goardian_process_memory_bytes`: Gauge showing process memory usage
-- `goardian_process_status`: Gauge showing process status (2=failed, 1=running, 0=stopped)
-- `goardian_process_runtime_seconds`: Histogram of process runtime durations
+- `goardian_process_status`: Gauge showing process status (0=running, 1=stopped, 2=failed)
+- `goardian_process_runtime_seconds`: Histogram tracking the runtime of process instances in seconds, useful for analyzing process lifetime distributions
 
 Example Prometheus configuration:
 
@@ -127,6 +127,21 @@ scrape_configs:
   - job_name: 'goardian'
     static_configs:
       - targets: ['localhost:9090']
+```
+
+### Example Prometheus Queries
+
+#### Process Runtime Statistics
+
+```promql
+# Average runtime duration for each process instance:
+rate(goardian_process_runtime_seconds_sum[5m]) / rate(goardian_process_runtime_seconds_count[5m])
+
+# 90th percentile runtime duration for instances of a specific process:
+histogram_quantile(0.9, sum(rate(goardian_process_runtime_seconds_bucket{name="my-process"}[10m])) by (le, instance))
+
+# Count of short-lived processes (less than 10 seconds):
+sum(increase(goardian_process_runtime_seconds_bucket{le="10"}[1h])) by (name)
 ```
 
 ## Project Structure

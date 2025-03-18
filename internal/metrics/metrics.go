@@ -61,10 +61,10 @@ var (
 	processRuntime = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "goardian_process_runtime_seconds",
-			Help:    "Process runtime in seconds",
+			Help:    "Process runtime in seconds per instance",
 			Buckets: prometheus.ExponentialBuckets(1, 2, 10),
 		},
-		[]string{"name"},
+		[]string{"name", "instance"},
 	)
 )
 
@@ -107,7 +107,7 @@ func (mc *MetricsCollector) RecordStop(name string) {
 		p.stopTime = time.Now()
 		if !p.startTime.IsZero() {
 			runtime := p.stopTime.Sub(p.startTime).Seconds()
-			processRuntime.WithLabelValues(name).Observe(runtime)
+			processRuntime.WithLabelValues(name, "group").Observe(runtime)
 		}
 	}
 }
@@ -140,6 +140,25 @@ func (mc *MetricsCollector) RecordProcessState(name string, state int) {
 // RecordInstanceState records the state of a process instance (running, stopped, or failed)
 func (mc *MetricsCollector) RecordInstanceState(name string, instance int, state int) {
 	processInstanceStatus.WithLabelValues(name, fmt.Sprintf("%d", instance)).Set(float64(state))
+	if p, ok := mc.processes[name]; ok {
+		p.stopTime = time.Now()
+		if !p.startTime.IsZero() {
+			runtime := p.stopTime.Sub(p.startTime).Seconds()
+			processRuntime.WithLabelValues(name, "group").Observe(runtime)
+		}
+	}
+}
+
+// RecordInstanceStart records when a specific process instance starts
+func (mc *MetricsCollector) RecordInstanceStart(name string, instance int) {
+	processRestarts.WithLabelValues(name).Inc()
+}
+
+// RecordInstanceStop records when a specific process instance stops and records its runtime
+func (mc *MetricsCollector) RecordInstanceStop(name string, instance int, runtimeSeconds float64) {
+	if runtimeSeconds > 0 {
+		processRuntime.WithLabelValues(name, fmt.Sprintf("%d", instance)).Observe(runtimeSeconds)
+	}
 }
 
 func (mc *MetricsCollector) Collect(ch chan<- prometheus.Metric) {
