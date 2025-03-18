@@ -28,6 +28,7 @@ type ProcessConfig struct {
 type Config struct {
 	LogFormat     string          `yaml:"log_format"`
 	MetricsAddr   string          `yaml:"metrics_addr"`
+	WebAddr       string          `yaml:"web_addr"`
 	Processes     []ProcessConfig `yaml:"processes"`
 	ShutdownDelay time.Duration   `yaml:"shutdown_delay"` // How long to wait for processes to shutdown
 }
