@@ -53,7 +53,9 @@ func NewLogger(format string) *Logger {
 }
 
 type consoleHandler struct {
-	writer io.Writer
+	writer     io.Writer
+	preformatted []slog.Attr
+	group        string
 }
 
 func (h *consoleHandler) Handle(ctx context.Context, r slog.Record) error {
@@ -69,11 +71,22 @@ func (h *consoleHandler) Handle(ctx context.Context, r slog.Record) error {
 		colorReset,
 		r.Message)
 
-	// Add attributes if any
-	if r.NumAttrs() > 0 {
-		attrs := make([]string, 0, r.NumAttrs())
+	// Collect all attributes: preformatted first, then record attrs
+	totalAttrs := len(h.preformatted) + r.NumAttrs()
+	if totalAttrs > 0 {
+		attrs := make([]string, 0, totalAttrs)
+
+		prefix := ""
+		if h.group != "" {
+			prefix = h.group + "."
+		}
+
+		for _, a := range h.preformatted {
+			attrs = append(attrs, fmt.Sprintf("%s%s=%v", prefix, a.Key, a.Value.Any()))
+		}
+
 		r.Attrs(func(a slog.Attr) bool {
-			attrs = append(attrs, fmt.Sprintf("%s=%v", a.Key, a.Value.Any()))
+			attrs = append(attrs, fmt.Sprintf("%s%s=%v", prefix, a.Key, a.Value.Any()))
 			return true
 		})
 		msg += "  " + strings.Join(attrs, " ")
@@ -86,11 +99,26 @@ func (h *consoleHandler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 func (h *consoleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return h
+	newAttrs := make([]slog.Attr, len(h.preformatted), len(h.preformatted)+len(attrs))
+	copy(newAttrs, h.preformatted)
+	newAttrs = append(newAttrs, attrs...)
+	return &consoleHandler{
+		writer:       h.writer,
+		preformatted: newAttrs,
+		group:        h.group,
+	}
 }
 
 func (h *consoleHandler) WithGroup(name string) slog.Handler {
-	return h
+	newGroup := name
+	if h.group != "" {
+		newGroup = h.group + "." + name
+	}
+	return &consoleHandler{
+		writer:       h.writer,
+		preformatted: h.preformatted,
+		group:        newGroup,
+	}
 }
 
 func (h *consoleHandler) Enabled(ctx context.Context, level slog.Level) bool {

@@ -39,7 +39,7 @@ var (
 			Name: "goardian_process_memory_bytes",
 			Help: "Process memory usage in bytes",
 		},
-		[]string{"name"},
+		[]string{"name", "instance"},
 	)
 
 	processStatus = prometheus.NewGaugeVec(
@@ -124,7 +124,7 @@ func (mc *MetricsCollector) RecordStateChange(name string, instance int, running
 
 // RecordMemoryUsage records the memory usage for a specific process instance
 func (mc *MetricsCollector) RecordMemoryUsage(name string, instance int, memoryBytes float64) {
-	processMemoryUsage.WithLabelValues(name).Set(memoryBytes)
+	processMemoryUsage.WithLabelValues(name, fmt.Sprintf("%d", instance)).Set(memoryBytes)
 }
 
 // RecordFailureRestart records a restart due to a failure

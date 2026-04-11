@@ -39,6 +39,7 @@ type WSServer struct {
 	logger     *logger.Logger
 	mu         sync.RWMutex
 	done       chan struct{}
+	closeOnce  sync.Once
 }
 
 // NewWSServer creates a new WebSocket server
@@ -93,16 +94,18 @@ func (s *WSServer) Start(ctx context.Context) {
 
 // Stop stops the WebSocket server
 func (s *WSServer) Stop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 
-	// Close all client connections
-	for client := range s.clients {
-		client.Close()
-		delete(s.clients, client)
-	}
+		// Close all client connections
+		for client := range s.clients {
+			client.Close()
+			delete(s.clients, client)
+		}
 
-	close(s.done)
+		close(s.done)
+	})
 }
 
 // Broadcast sends an event to all connected clients

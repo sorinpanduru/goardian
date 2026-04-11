@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -81,5 +82,49 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
+	if err := config.validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	return &config, nil
+}
+
+// validate checks the configuration for logical errors.
+func (c *Config) validate() error {
+	if c.LogFormat != "console" && c.LogFormat != "json" {
+		return fmt.Errorf("invalid log_format %q: must be \"console\" or \"json\"", c.LogFormat)
+	}
+
+	seen := make(map[string]bool, len(c.Processes))
+	var errs []error
+
+	for i, p := range c.Processes {
+		prefix := fmt.Sprintf("processes[%d]", i)
+
+		if p.Name == "" {
+			errs = append(errs, fmt.Errorf("%s: name is required", prefix))
+		} else if seen[p.Name] {
+			errs = append(errs, fmt.Errorf("%s: duplicate process name %q", prefix, p.Name))
+		} else {
+			seen[p.Name] = true
+		}
+
+		if p.Command == "" {
+			errs = append(errs, fmt.Errorf("%s (%s): command is required", prefix, p.Name))
+		}
+
+		if p.NumProcs < 1 {
+			errs = append(errs, fmt.Errorf("%s (%s): numprocs must be >= 1, got %d", prefix, p.Name, p.NumProcs))
+		}
+
+		if p.MaxRestarts < 0 {
+			errs = append(errs, fmt.Errorf("%s (%s): max_restarts must be >= 0, got %d", prefix, p.Name, p.MaxRestarts))
+		}
+
+		if p.BackoffFactor < 1 {
+			errs = append(errs, fmt.Errorf("%s (%s): backoff_factor must be >= 1, got %g", prefix, p.Name, p.BackoffFactor))
+		}
+	}
+
+	return errors.Join(errs...)
 }
