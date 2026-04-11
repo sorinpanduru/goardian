@@ -75,3 +75,53 @@ processes:
 	_, err = LoadConfig(configPath)
 	assert.Error(t, err)
 }
+
+func TestLoadConfig_DuplicateProcessNames(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `processes:
+  - name: "myproc"
+    command: "/bin/sleep"
+    args: ["5"]
+  - name: "myproc"
+    command: "/bin/echo"
+    args: ["hello"]
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	_, err = LoadConfig(configPath)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate process name")
+}
+
+func TestLoadConfig_MissingCommand(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `processes:
+  - name: "nocommand"
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	_, err = LoadConfig(configPath)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "command is required")
+}
+
+func TestLoadConfig_InvalidLogFormat(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `log_format: "xml"
+processes:
+  - name: "proc1"
+    command: "/bin/sleep"
+    args: ["5"]
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	_, err = LoadConfig(configPath)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid log_format")
+}

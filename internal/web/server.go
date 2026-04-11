@@ -34,42 +34,34 @@ func NewServer(addr string, manager *process.Manager, log *logger.Logger, appCtx
 	}
 
 	// Set up state change notifications for all existing processes
-	go func() {
-		// Give a moment for things to initialize
-		time.Sleep(500 * time.Millisecond)
-
-		// Set up listeners for all process groups
-		for _, group := range manager.GetProcessGroups() {
-			groupName := group.Config().Name
-
-			// Set up state change listeners for each process
-			for _, proc := range group.GetProcesses() {
-				if proc != nil {
-					// Create a closure to capture the group name
-					setStateChangedFunc := func(p *process.Process) {
-						// Current state change function (if any)
-						existingFunc := p.StateChanged
-
-						// Set new state change function that also broadcasts to WebSocket
-						p.StateChanged = func(p *process.Process) {
-							// Call existing function if it exists
-							if existingFunc != nil {
-								existingFunc(p)
-							}
-
-							// Broadcast state change to WebSocket clients
-							wsServer.BroadcastProcessState(groupName, p)
-						}
-					}
-
-					// Apply the function to this process
-					setStateChangedFunc(proc)
-				}
-			}
-		}
-	}()
+	server.setupStateChangeListeners()
 
 	return server
+}
+
+// setupStateChangeListeners wires WebSocket broadcast into each process's
+// StateChanged callback so dashboard clients receive real-time updates.
+func (s *Server) setupStateChangeListeners() {
+	for _, group := range s.processManager.GetProcessGroups() {
+		groupName := group.Config().Name
+
+		for _, proc := range group.GetProcesses() {
+			if proc == nil {
+				continue
+			}
+
+			existingFunc := proc.StateChanged
+			wsServer := s.wsServer
+			gn := groupName // capture for closure
+
+			proc.StateChanged = func(p *process.Process) {
+				if existingFunc != nil {
+					existingFunc(p)
+				}
+				wsServer.BroadcastProcessState(gn, p)
+			}
+		}
+	}
 }
 
 // Start starts the web server
@@ -165,68 +157,68 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
+// buildGroupInfo builds a JSON-serializable map for a process group and its instances.
+func buildGroupInfo(group *process.ProcessGroup) map[string]interface{} {
+	cfg := group.Config()
+	processes := group.GetProcesses()
+
+	groupInfo := map[string]interface{}{
+		"name":      cfg.Name,
+		"command":   cfg.Command,
+		"args":      cfg.Args,
+		"numProcs":  cfg.NumProcs,
+		"processes": make([]map[string]interface{}, 0, len(processes)),
+	}
+
+	runningCount := 0
+	for _, proc := range processes {
+		if proc == nil {
+			continue
+		}
+
+		memoryBytes := proc.GetMemoryUsage()
+		uptimeSeconds := proc.GetUptime()
+
+		procInfo := map[string]interface{}{
+			"instanceId":   proc.InstanceID(),
+			"running":      proc.IsRunning(),
+			"memoryBytes":  memoryBytes,
+			"memoryMB":     float64(memoryBytes) / 1024 / 1024,
+			"memoryString": FormatMemorySize(memoryBytes),
+			"uptime":       uptimeSeconds,
+			"uptimeString": FormatUptime(uptimeSeconds),
+			"startTime":    proc.GetStartTime().Format(time.RFC3339),
+			"state":        proc.GetState(),
+		}
+
+		if proc.IsRunning() {
+			runningCount++
+		}
+
+		if backoffState := proc.GetBackoffState(); backoffState != nil {
+			procInfo["backoffState"] = backoffState
+		}
+
+		if restartStats := proc.GetRestartStats(); restartStats != nil {
+			procInfo["restartStats"] = restartStats
+		}
+
+		groupInfo["processes"] = append(groupInfo["processes"].([]map[string]interface{}), procInfo)
+	}
+
+	groupInfo["runningCount"] = runningCount
+	groupInfo["totalCount"] = len(processes)
+
+	return groupInfo
+}
+
 // handleGetProcesses returns a list of all processes
 func (s *Server) handleGetProcesses(w http.ResponseWriter, r *http.Request) {
 	groups := s.processManager.GetProcessGroups()
 	response := make([]map[string]interface{}, 0, len(groups))
 
 	for _, group := range groups {
-		cfg := group.Config()
-		processes := group.GetProcesses()
-
-		groupInfo := map[string]interface{}{
-			"name":      cfg.Name,
-			"command":   cfg.Command,
-			"args":      cfg.Args,
-			"numProcs":  cfg.NumProcs,
-			"processes": make([]map[string]interface{}, 0, len(processes)),
-		}
-
-		runningCount := 0
-		for _, proc := range processes {
-			if proc != nil {
-				// Get memory usage in human-readable format
-				memoryBytes := proc.GetMemoryUsage()
-				memoryMB := float64(memoryBytes) / 1024 / 1024
-
-				// Get uptime in seconds and format it
-				uptimeSeconds := proc.GetUptime()
-
-				procInfo := map[string]interface{}{
-					"instanceId":   proc.InstanceID(),
-					"running":      proc.IsRunning(),
-					"memoryBytes":  memoryBytes,
-					"memoryMB":     memoryMB,
-					"memoryString": FormatMemorySize(memoryBytes),
-					"uptime":       uptimeSeconds,
-					"uptimeString": FormatUptime(uptimeSeconds),
-					"startTime":    proc.GetStartTime().Format(time.RFC3339),
-					"state":        proc.GetState(),
-				}
-
-				if proc.IsRunning() {
-					runningCount++
-				}
-
-				// Add backoff state if available
-				if backoffState := proc.GetBackoffState(); backoffState != nil {
-					procInfo["backoffState"] = backoffState
-				}
-
-				// Add restart statistics if available
-				if restartStats := proc.GetRestartStats(); restartStats != nil {
-					procInfo["restartStats"] = restartStats
-				}
-
-				groupInfo["processes"] = append(groupInfo["processes"].([]map[string]interface{}), procInfo)
-			}
-		}
-
-		// Add running count
-		groupInfo["runningCount"] = runningCount
-		groupInfo["totalCount"] = len(processes)
-
-		response = append(response, groupInfo)
+		response = append(response, buildGroupInfo(group))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -242,63 +234,8 @@ func (s *Server) handleGetProcessGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := group.Config()
-	processes := group.GetProcesses()
-
-	response := map[string]interface{}{
-		"name":      cfg.Name,
-		"command":   cfg.Command,
-		"args":      cfg.Args,
-		"numProcs":  cfg.NumProcs,
-		"processes": make([]map[string]interface{}, 0, len(processes)),
-	}
-
-	runningCount := 0
-	for _, proc := range processes {
-		if proc != nil {
-			// Get memory usage in human-readable format
-			memoryBytes := proc.GetMemoryUsage()
-			memoryMB := float64(memoryBytes) / 1024 / 1024
-
-			// Get uptime in seconds and format it
-			uptimeSeconds := proc.GetUptime()
-
-			procInfo := map[string]interface{}{
-				"instanceId":   proc.InstanceID(),
-				"running":      proc.IsRunning(),
-				"memoryBytes":  memoryBytes,
-				"memoryMB":     memoryMB,
-				"memoryString": FormatMemorySize(memoryBytes),
-				"uptime":       uptimeSeconds,
-				"uptimeString": FormatUptime(uptimeSeconds),
-				"startTime":    proc.GetStartTime().Format(time.RFC3339),
-				"state":        proc.GetState(),
-			}
-
-			if proc.IsRunning() {
-				runningCount++
-			}
-
-			// Add backoff state if available
-			if backoffState := proc.GetBackoffState(); backoffState != nil {
-				procInfo["backoffState"] = backoffState
-			}
-
-			// Add restart statistics if available
-			if restartStats := proc.GetRestartStats(); restartStats != nil {
-				procInfo["restartStats"] = restartStats
-			}
-
-			response["processes"] = append(response["processes"].([]map[string]interface{}), procInfo)
-		}
-	}
-
-	// Add running count
-	response["runningCount"] = runningCount
-	response["totalCount"] = len(processes)
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(buildGroupInfo(group))
 }
 
 // handleStartProcess starts a process group

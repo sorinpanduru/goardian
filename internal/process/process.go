@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"runtime"
@@ -18,11 +18,6 @@ import (
 	"github.com/sorinpanduru/goardian/internal/logger"
 	"github.com/sorinpanduru/goardian/internal/metrics"
 )
-
-func init() {
-	// Seed the random number generator for backoff jitter
-	rand.Seed(time.Now().UnixNano())
-}
 
 // ProcessState represents the desired state of a process
 type ProcessState int
@@ -495,8 +490,9 @@ func (p *Process) Start(ctx context.Context) error {
 		p.exitChan = make(chan error, 1)
 	}
 
-	// Create and start the process
-	cmd := exec.CommandContext(ctx, p.config.Command, p.config.Args...)
+	// Use exec.Command (not CommandContext) so that context cancellation does not
+	// send SIGKILL directly, bypassing our graceful SIGTERM shutdown in Stop().
+	cmd := exec.Command(p.config.Command, p.config.Args...)
 	cmd.Dir = p.config.WorkingDir
 	cmd.Env = p.config.Environment
 
@@ -614,6 +610,24 @@ func (p *Process) Start(ctx context.Context) error {
 	}
 }
 
+// markStopped transitions the process to the stopped state, closes its done channel,
+// clears the cmd reference, and notifies the StateChanged callback.
+// The caller must NOT hold p.mu when calling this method.
+func (p *Process) markStopped() {
+	p.mu.Lock()
+	wasRunning := p.running
+	p.running = false
+	p.cmd = nil
+	p.closeOnce.Do(func() {
+		close(p.done)
+	})
+	p.mu.Unlock()
+
+	if wasRunning && p.StateChanged != nil {
+		p.StateChanged(p)
+	}
+}
+
 // Stop stops a process instance
 func (p *Process) Stop(ctx context.Context) error {
 	p.mu.Lock()
@@ -638,12 +652,10 @@ func (p *Process) Stop(ctx context.Context) error {
 		// Record state change in metrics
 		p.metrics.RecordInstanceState(p.groupName, p.instanceID, 1)
 
-		// Only record runtime if we had a valid runtime calculation
 		if runtimeSeconds > 0 {
 			p.metrics.RecordInstanceStop(p.groupName, p.instanceID, runtimeSeconds)
 		}
 
-		// Notify about state change if there was a change
 		if wasRunning && p.StateChanged != nil {
 			p.StateChanged(p)
 		}
@@ -655,10 +667,8 @@ func (p *Process) Stop(ctx context.Context) error {
 	}
 
 	// Check for exitChan events before proceeding
-	// This ensures we don't miss any exit events that might have occurred
 	select {
 	case err := <-p.exitChan:
-		// Process has already exited, handle it
 		p.running = false
 		p.cmd = nil
 		p.closeOnce.Do(func() {
@@ -666,12 +676,10 @@ func (p *Process) Stop(ctx context.Context) error {
 		})
 		p.mu.Unlock()
 
-		// Record runtime metrics if we had a valid runtime calculation
 		if runtimeSeconds > 0 {
 			p.metrics.RecordInstanceStop(p.groupName, p.instanceID, runtimeSeconds)
 		}
 
-		// Notify about state change
 		if p.StateChanged != nil {
 			p.StateChanged(p)
 		}
@@ -691,25 +699,13 @@ func (p *Process) Stop(ctx context.Context) error {
 	}
 
 	// Try graceful shutdown with SIGTERM
-	process := p.cmd.Process // Store reference to avoid race conditions
-	pid := process.Pid       // Remember the PID for additional checks
+	process := p.cmd.Process
+	pid := process.Pid
 	p.mu.Unlock()
 
 	// Double-check if the process is still running using the OS
 	if !processExists(pid) {
-		p.mu.Lock()
-		p.running = false
-		p.cmd = nil
-		p.closeOnce.Do(func() {
-			close(p.done)
-		})
-		p.mu.Unlock()
-
-		// Notify about state change
-		if p.StateChanged != nil {
-			p.StateChanged(p)
-		}
-
+		p.markStopped()
 		p.logger.InfoContext(ctx, "process instance already exited (OS check)",
 			"process", p.groupName,
 			"instance", p.instanceID)
@@ -718,22 +714,8 @@ func (p *Process) Stop(ctx context.Context) error {
 
 	// Send SIGTERM
 	if err := process.Signal(syscall.SIGTERM); err != nil {
-		// Check if process has already exited
 		if err.Error() == "os: process already finished" {
-			p.mu.Lock()
-			wasRunning := p.running
-			p.running = false
-			p.cmd = nil
-			p.closeOnce.Do(func() {
-				close(p.done)
-			})
-			p.mu.Unlock()
-
-			// Notify about state change if there was a change
-			if wasRunning && p.StateChanged != nil {
-				p.StateChanged(p)
-			}
-
+			p.markStopped()
 			p.logger.InfoContext(ctx, "process instance already exited",
 				"process", p.groupName,
 				"instance", p.instanceID)
@@ -749,25 +731,12 @@ func (p *Process) Stop(ctx context.Context) error {
 	// Non-blocking check if process has already exited
 	select {
 	case <-p.exitChan:
-		p.mu.Lock()
-		wasRunning := p.running
-		p.running = false
-		p.cmd = nil
-		p.closeOnce.Do(func() {
-			close(p.done)
-		})
-		p.mu.Unlock()
-
-		// Notify about state change if there was a change
-		if wasRunning && p.StateChanged != nil {
-			p.StateChanged(p)
-		}
-
+		p.markStopped()
 		p.logger.InfoContext(ctx, "process instance stopped immediately",
 			"process", p.groupName,
 			"instance", p.instanceID)
 		return nil
-	case <-time.After(50 * time.Millisecond): // Small delay to give process a chance to exit quickly
+	case <-time.After(50 * time.Millisecond):
 		// Continue if process hasn't exited yet
 	}
 
@@ -781,20 +750,7 @@ func (p *Process) Stop(ctx context.Context) error {
 	for {
 		select {
 		case <-p.exitChan:
-			p.mu.Lock()
-			wasRunning := p.running
-			p.running = false
-			p.cmd = nil
-			p.closeOnce.Do(func() {
-				close(p.done)
-			})
-			p.mu.Unlock()
-
-			// Notify about state change if there was a change
-			if wasRunning && p.StateChanged != nil {
-				p.StateChanged(p)
-			}
-
+			p.markStopped()
 			p.logger.InfoContext(ctx, "process instance stopped gracefully",
 				"process", p.groupName,
 				"instance", p.instanceID)
@@ -802,31 +758,18 @@ func (p *Process) Stop(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-stopCheckTicker.C:
-			// Check if process is still running
 			p.mu.RLock()
 			running := p.running
 			p.mu.RUnlock()
 
 			if !running {
-				p.mu.Lock()
-				p.cmd = nil
-				p.closeOnce.Do(func() {
-					close(p.done)
-				})
-				p.mu.Unlock()
-
-				// Notify about state change
-				if p.StateChanged != nil {
-					p.StateChanged(p)
-				}
-
+				p.markStopped()
 				p.logger.InfoContext(ctx, "process instance stopped (detected via check)",
 					"process", p.groupName,
 					"instance", p.instanceID)
 				return nil
 			}
 		case <-timeout:
-			// Try to kill the process with SIGKILL
 			p.mu.RLock()
 			cmd := p.cmd
 			p.mu.RUnlock()
@@ -838,20 +781,7 @@ func (p *Process) Stop(ctx context.Context) error {
 
 				if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
 					if err.Error() == "os: process already finished" {
-						p.mu.Lock()
-						wasRunning := p.running
-						p.running = false
-						p.cmd = nil
-						p.closeOnce.Do(func() {
-							close(p.done)
-						})
-						p.mu.Unlock()
-
-						// Notify about state change if there was a change
-						if wasRunning && p.StateChanged != nil {
-							p.StateChanged(p)
-						}
-
+						p.markStopped()
 						p.logger.InfoContext(ctx, "process instance exited before SIGKILL",
 							"process", p.groupName,
 							"instance", p.instanceID)
@@ -867,59 +797,20 @@ func (p *Process) Stop(ctx context.Context) error {
 				// Wait a short time for SIGKILL to take effect
 				select {
 				case <-p.exitChan:
-					p.mu.Lock()
-					wasRunning := p.running
-					p.running = false
-					p.cmd = nil
-					p.closeOnce.Do(func() {
-						close(p.done)
-					})
-					p.mu.Unlock()
-
-					// Notify about state change if there was a change
-					if wasRunning && p.StateChanged != nil {
-						p.StateChanged(p)
-					}
-
+					p.markStopped()
 					p.logger.InfoContext(ctx, "process instance stopped after SIGKILL",
 						"process", p.groupName,
 						"instance", p.instanceID)
 					return nil
 				case <-time.After(2 * time.Second):
-					p.mu.Lock()
-					wasRunning := p.running
-					p.running = false
-					p.cmd = nil
-					p.closeOnce.Do(func() {
-						close(p.done)
-					})
-					p.mu.Unlock()
-
-					// Notify about state change if there was a change
-					if wasRunning && p.StateChanged != nil {
-						p.StateChanged(p)
-					}
-
+					p.markStopped()
 					p.logger.ErrorContext(ctx, "process instance still running after SIGKILL, giving up",
 						"process", p.groupName,
 						"instance", p.instanceID)
 					return fmt.Errorf("process still running after SIGKILL")
 				}
 			} else {
-				// Process already gone
-				p.mu.Lock()
-				wasRunning := p.running
-				p.running = false
-				p.closeOnce.Do(func() {
-					close(p.done)
-				})
-				p.mu.Unlock()
-
-				// Notify about state change if there was a change
-				if wasRunning && p.StateChanged != nil {
-					p.StateChanged(p)
-				}
-
+				p.markStopped()
 				p.logger.InfoContext(ctx, "process instance already exited (pre-SIGKILL check)",
 					"process", p.groupName,
 					"instance", p.instanceID)
@@ -994,36 +885,47 @@ func processExists(pid int) bool {
 }
 
 // getBackoffDuration calculates the backoff duration based on consecutive failures
-// using an exponential backoff strategy with jitter
+// using an exponential backoff strategy with jitter. It respects the configured
+// backoff_factor and backoff_max_delay values.
 func (p *Process) getBackoffDuration() time.Duration {
 	if p.consecutiveFailures <= 0 {
 		return 0
 	}
 
-	// Base delay is 1 second
-	baseDelay := 1 * time.Second
-
-	// Calculate exponential backoff: baseDelay * 2^(failures-1)
-	// but cap at 5 failures to prevent extremely long waits
-	exponent := p.consecutiveFailures
-	if exponent > 5 {
-		exponent = 5
+	// Use the configured restart_delay as the base, falling back to 1s
+	baseDelay := p.config.RestartDelay
+	if baseDelay <= 0 {
+		baseDelay = 1 * time.Second
 	}
 
-	// Calculate delay with exponential backoff
-	backoff := baseDelay * time.Duration(1<<uint(exponent-1))
+	// Use the configured backoff factor, falling back to 2.0
+	factor := p.config.BackoffFactor
+	if factor < 1 {
+		factor = 2.0
+	}
+
+	// Calculate exponential backoff: baseDelay * factor^(failures-1)
+	backoff := float64(baseDelay)
+	for i := 1; i < p.consecutiveFailures && i < 10; i++ {
+		backoff *= factor
+	}
 
 	// Add jitter: +/- 20% of the calculated backoff
-	jitter := time.Duration(rand.Float64()*0.4-0.2) * backoff
-	backoff = backoff + jitter
+	jitter := rand.Float64()*0.4 - 0.2 //nolint:gosec
+	backoff = backoff * (1 + jitter)
 
-	// Cap at 60 seconds maximum
-	maxBackoff := 60 * time.Second
-	if backoff > maxBackoff {
-		backoff = maxBackoff
+	// Cap at configured max delay, falling back to 60s
+	maxBackoff := p.config.BackoffMaxDelay
+	if maxBackoff <= 0 {
+		maxBackoff = 60 * time.Second
 	}
 
-	return backoff
+	result := time.Duration(backoff)
+	if result > maxBackoff {
+		result = maxBackoff
+	}
+
+	return result
 }
 
 // resetBackoff resets the consecutive failures counter

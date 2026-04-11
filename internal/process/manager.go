@@ -2,6 +2,8 @@ package process
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/sorinpanduru/goardian/internal/config"
@@ -60,14 +62,16 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	var errs []error
 	for _, group := range m.groups {
 		if err := group.Start(ctx); err != nil {
 			m.logger.ErrorContext(ctx, "failed to start process group",
 				"process", group.Config().Name,
 				"error", err)
+			errs = append(errs, fmt.Errorf("start %s: %w", group.Config().Name, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // StopAll stops all process groups
@@ -75,14 +79,16 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	var errs []error
 	for _, group := range m.groups {
 		if err := group.Stop(ctx); err != nil {
 			m.logger.ErrorContext(ctx, "failed to stop process group",
 				"process", group.Config().Name,
 				"error", err)
+			errs = append(errs, fmt.Errorf("stop %s: %w", group.Config().Name, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // MonitorAll starts monitoring all process groups
@@ -90,12 +96,14 @@ func (m *Manager) MonitorAll(ctx context.Context) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	var errs []error
 	for _, group := range m.groups {
 		if err := group.Monitor(ctx); err != nil {
 			m.logger.ErrorContext(ctx, "failed to monitor process group",
 				"process", group.Config().Name,
 				"error", err)
+			errs = append(errs, fmt.Errorf("monitor %s: %w", group.Config().Name, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
